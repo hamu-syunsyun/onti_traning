@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>音程練習</title>
+<meta name="theme-color" content="#16181d">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="音程練習">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<style>
+  :root {
+    --bg: #f4f3ef;
+    --surface: #ffffff;
+    --ink: #1d1f24;
+    --muted: #6b6f78;
+    --line: #d9d8d2;
+    --accent: #c2410c;
+    --accent-ink: #ffffff;
+    --band: rgba(29, 31, 36, 0.14);
+    --band-active: rgba(29, 31, 36, 0.32);
+    --sing: #0f766e;
+    --warn: #b45309;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16181d;
+      --surface: #1f2228;
+      --ink: #e8e6e1;
+      --muted: #9a9ea8;
+      --line: #33373f;
+      --accent: #f97316;
+      --accent-ink: #16181d;
+      --band: rgba(232, 230, 225, 0.14);
+      --band-active: rgba(232, 230, 225, 0.34);
+      --sing: #2dd4bf;
+      --warn: #fbbf24;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+    font-size: 16px;
+    line-height: 1.5;
+    -webkit-tap-highlight-color: transparent;
+    padding: env(safe-area-inset-top) 16px calc(env(safe-area-inset-bottom) + 16px);
+  }
+  main { max-width: 560px; margin: 0 auto; }
+  header {
+    display: flex; align-items: baseline; justify-content: space-between;
+    padding: 14px 0 10px;
+  }
+  h1 { font-size: 18px; margin: 0; font-weight: 700; }
+  .timer { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 15px; }
+  .timer.over { color: var(--warn); font-weight: 700; }
+
+  .stage {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 14px 14px 10px;
+  }
+  .status-row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+  .phase { font-size: 15px; font-weight: 700; color: var(--muted); }
+  .phase.sing { color: var(--sing); }
+  .phase.listen { color: var(--ink); }
+  .progress { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .notes {
+    font-size: 34px; font-weight: 700; letter-spacing: 0.02em;
+    margin: 4px 0 8px; font-variant-numeric: tabular-nums;
+    min-height: 1.3em;
+  }
+  .notes .sep { color: var(--muted); font-weight: 400; margin: 0 0.25em; }
+  .notes .n.on { color: var(--accent); }
+  canvas { display: block; width: 100%; height: 220px; }
+  .notice { font-size: 13px; color: var(--warn); min-height: 1.5em; margin-top: 6px; }
+
+  .controls { display: grid; gap: 10px; margin: 14px 0; }
+  .controls .row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+  button {
+    font: inherit; border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+    border-radius: 12px; padding: 14px 10px; font-weight: 600; cursor: pointer;
+    touch-action: manipulation;
+  }
+  button:disabled { opacity: 0.4; }
+  button.primary {
+    background: var(--accent); border-color: var(--accent); color: var(--accent-ink);
+    font-size: 18px; padding: 18px;
+  }
+  [hidden] { display: none !important; }
+
+  .settings { margin-top: 6px; }
+  .settings h2 { font-size: 14px; color: var(--muted); font-weight: 600; margin: 18px 0 8px; }
+  .field {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 11px 0; border-bottom: 1px solid var(--line);
+  }
+  .field:last-child { border-bottom: 0; }
+  .field label { flex: 1; }
+  .field small { display: block; color: var(--muted); font-size: 12px; }
+  select, input[type="range"] { font: inherit; }
+  select {
+    background: var(--surface); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 8px; padding: 6px 8px;
+  }
+  input[type="range"] { width: 140px; accent-color: var(--accent); }
+  input[type="checkbox"] { width: 22px; height: 22px; accent-color: var(--accent); }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg input { position: absolute; opacity: 0; pointer-events: none; }
+  .seg label { padding: 6px 12px; cursor: pointer; white-space: nowrap; }
+  .seg input:checked + label { background: var(--accent); color: var(--accent-ink); }
+  .val { font-variant-numeric: tabular-nums; min-width: 3.2em; text-align: right; display: inline-block; color: var(--muted); }
+  .summary { font-size: 13px; color: var(--muted); margin-top: 10px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>音程練習</h1>
+    <span class="timer" id="timer">0:00</span>
+  </header>
+
+  <section class="stage">
+    <div class="status-row">
+      <span class="phase" id="phase">準備</span>
+      <span class="progress" id="progress"></span>
+    </div>
+    <div class="notes" id="notes"></div>
+    <canvas id="view"></canvas>
+    <div class="notice" id="notice"></div>
+  </section>
+
+  <section class="controls">
+    <button class="primary" id="startBtn">開始</button>
+    <button class="primary" id="nextBtn" hidden>次へ</button>
+    <div class="row" id="runRow" hidden>
+      <button id="prevBtn">前へ</button>
+      <button id="againBtn">もう一度</button>
+      <button id="stopBtn">終了</button>
+    </div>
+  </section>
+
+  <section class="settings" id="settings">
+    <h2>設定</h2>
+    <div class="stage">
+      <div class="field">
+        <label>パターン<small id="patternHint"></small></label>
+        <span class="seg">
+          <input type="radio" name="pattern" id="patA" value="A"><label for="patA">A 移動</label>
+          <input type="radio" name="pattern" id="patB" value="B"><label for="patB">B 基準音</label>
+        </span>
+      </div>
+      <div class="field">
+        <label for="startNote">開始音</label>
+        <select id="startNote"></select>
+      </div>
+      <div class="field">
+        <label for="upperNote">上限音</label>
+        <select id="upperNote"></select>
+      </div>
+      <div class="field">
+        <label for="noteLen">1音の長さ</label>
+        <span><input type="range" id="noteLen" min="0.5" max="2" step="0.1"><span class="val" id="noteLenVal"></span></span>
+      </div>
+      <div class="field">
+        <label for="auto">自動で次へ進む<small>オフのときはタップで進む</small></label>
+        <input type="checkbox" id="auto">
+      </div>
+      <div class="field">
+        <label for="volume">音量</label>
+        <span><input type="range" id="volume" min="0" max="1" step="0.05"><span class="val" id="volumeVal"></span></span>
+      </div>
+    </div>
+    <p class="summary" id="summary"></p>
+  </section>
+</main>
+
+<script>
+'use strict';
+
+// ---------- 音名・周波数 ----------
+const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+const noteName = (m) => NOTE_NAMES[m % 12] + (Math.floor(m / 12) - 1);
+const midiToFreq = (m) => 440 * Math.pow(2, (m - 69) / 12);
+const cents = (f, fRef) => 1200 * Math.log2(f / fRef); // 第2段階の判定で使う
+
+// ---------- 設定 ----------
+const SETTINGS_KEY = 'pitch-trainer:settings';
+const DEFAULTS = {
+  pattern: 'A',
+  startNote: 48,  // C3
+  upperNote: 69,  // A4
+  noteLen: 1.0,
+  auto: false,
+  volume: 0.7,
+};
+const NOTE_GAP = 0.2;          // 音と音の間（秒）
+const SESSION_LIMIT = 5 * 60;  // 1回の練習の目安（秒）
+
+function loadSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
+    return { ...DEFAULTS, ...saved };
+  } catch (e) {
+    return { ...DEFAULTS };
+  }
+}
+function saveSettings() {
+  try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) { /* 保存できなくても動かす */ }
+}
+let settings = loadSettings();
+
+// ---------- 練習パターン ----------
+// パターンB で広げていく音程（半音数）: 長2度, 長3度, 完全4度, 完全5度, 長6度, 長7度, オクターブ
+const B_INTERVALS = [2, 4, 5, 7, 9, 11, 12];
+
+function buildSequence(pattern, start, upper) {
+  if (pattern === 'A') {
+    const up = [];
+    for (let s = start; s + 2 <= upper; s++) up.push({ notes: [s, s + 2, s] });
+    return up.concat(up.slice(0, -1).reverse());
+  }
+  // パターンB: 1セット = 基準音固定で到達音を広げる。セットごとに基準音を半音上げ、上限に達したら下げる
+  const sets = [];
+  const lastBase = upper - start >= 12 ? upper - 12 : start;
+  for (let b = start; b <= lastBase; b++) {
+    const steps = B_INTERVALS.filter((i) => b + i <= upper).map((i) => ({ notes: [b, b + i, b] }));
+    if (steps.length) sets.push(steps);
+  }
+  const all = sets.concat(sets.slice(0, -1).reverse());
+  const out = [];
+  all.forEach((steps, si) => steps.forEach((st) => out.push({ ...st, set: si + 1, setCount: all.length })));
+  return out;
+}
+
+// ---------- 音源 ----------
+let ctx = null;
+let master = null;
+let wave = null;
+let activeNodes = [];
+
+function ensureAudio() {
+  if (!ctx) {
+    // iOS 17+ でマナーモード時も鳴らす
+    if (navigator.audioSession) {
+      try { navigator.audioSession.type = 'playback'; } catch (e) { /* 未対応なら無視 */ }
+    }
+    ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 });
+    master = ctx.createGain();
+    master.gain.value = settings.volume;
+    master.connect(ctx.destination);
+    wave = buildWave(ctx);
+  }
+  if (ctx.state !== 'running') ctx.resume();
+  return ctx;
+}
+
+// triangle の倍音構成（奇数倍音 1/n²）に偶数倍音を少し足して、音程を取りやすくする
+function buildWave(ac) {
+  const N = 16;
+  const real = new Float32Array(N);
+  const imag = new Float32Array(N);
+  for (let n = 1; n < N; n++) {
+    if (n % 2 === 1) imag[n] = (8 / (Math.PI * Math.PI)) / (n * n) * (((n - 1) / 2) % 2 === 0 ? 1 : -1);
+  }
+  imag[2] = 0.28;
+  imag[4] = 0.10;
+  imag[6] = 0.04;
+  return ac.createPeriodicWave(real, imag);
+}
+
+const ADSR = { attack: 0.01, decay: 0.1, sustain: 0.7, release: 0.3 };
+
+function playNote(midi, t0, dur) {
+  const osc = ctx.createOscillator();
+  const env = ctx.createGain();
+  osc.setPeriodicWave(wave);
+  osc.frequency.value = midiToFreq(midi);
+  const peak = 0.5;
+  const g = env.gain;
+  g.setValueAtTime(0, t0);
+  g.linearRampToValueAtTime(peak, t0 + ADSR.attack);
+  g.linearRampToValueAtTime(peak * ADSR.sustain, t0 + ADSR.attack + ADSR.decay);
+  g.setValueAtTime(peak * ADSR.sustain, t0 + dur);
+  g.linearRampToValueAtTime(0, t0 + dur + ADSR.release);
+  osc.connect(env).connect(master);
+  osc.start(t0);
+  osc.stop(t0 + dur + ADSR.release + 0.02);
+  const rec = { osc, env };
+  activeNodes.push(rec);
+  osc.onended = () => { activeNodes = activeNodes.filter((r) => r !== rec); };
+}
+
+function silenceAll() {
+  if (!ctx) return;
+  const now = ctx.currentTime;
+  for (const { osc, env } of activeNodes) {
+    try {
+      env.gain.cancelScheduledValues(now);
+      env.gain.setValueAtTime(env.gain.value, now);
+      env.gain.linearRampToValueAtTime(0, now + 0.03);
+      osc.stop(now + 0.05);
+    } catch (e) { /* 既に停止済み */ }
+  }
+  activeNodes = [];
+}
+
+// ---------- 進行 ----------
+const state = {
+  running: false,
+  seq: [],
+  index: 0,
+  phase: 'idle',      // idle | listen | gap | sing | result
+  stepStart: 0,       // ctx.currentTime 基準の、このステップの開始時刻
+  sessionStart: 0,    // performance.now() 基準
+  gen: 0,             // 進行を中断するための世代番号
+  limitNotified: false,
+};
+
+function timing() {
+  const L = settings.noteLen;
+  const phrase = 3 * L + 2 * NOTE_GAP;
+  return { L, phrase, beat: L, total: phrase * 2 + L };
+}
+
+// 世代番号が変わっていたら中断する待ち
+function wait(sec, gen) {
+  return new Promise((resolve, reject) => {
+    setTimeout(() => (gen === state.gen ? resolve() : reject(new Error('cancelled'))), sec * 1000);
+  });
+}
+
+async function runStep() {
+  const gen = ++state.gen;
+  silenceAll();
+  const step = state.seq[state.index];
+  const { L, phrase, beat } = timing();
+  const t0 = ctx.currentTime + 0.08;
+  state.stepStart = t0;
+  step.notes.forEach((m, i) => playNote(m, t0 + i * (L + NOTE_GAP), L));
+  render();
+  try {
+    setPhase('listen');
+    await wait(phrase + 0.08, gen);
+    setPhase('gap');
+    await wait(beat, gen);
+    setPhase('sing');
+    // 第2段階: ここでマイク録音とピッチ検出を行う
+    await wait(phrase, gen);
+    setPhase('result');
+    if (overLimit()) notifyLimit();
+    if (settings.auto && !(overLimit())) {
+      await wait(1.0, gen);
+      advance(1);
+    }
+  } catch (e) {
+    // 中断された
+  }
+}
+
+function advance(delta) {
+  if (!state.running) return;
+  const next = state.index + delta;
+  if (next >= state.seq.length) { finish(true); return; }
+  state.index = Math.max(0, next);
+  runStep();
+}
+
+function setPhase(p) {
+  state.phase = p;
+  render();
+}
+
+function elapsed() {
+  return state.running ? (performance.now() - state.sessionStart) / 1000 : 0;
+}
+function overLimit() { return elapsed() >= SESSION_LIMIT; }
+function notifyLimit() {
+  if (state.limitNotified) return;
+  state.limitNotified = true;
+  showNotice('5分たちました。喉を休めましょう。');
+}
+
+let wakeLock = null;
+async function requestWakeLock() {
+  try { wakeLock = await navigator.wakeLock?.request('screen'); } catch (e) { wakeLock = null; }
+}
+
+function start() {
+  ensureAudio();
+  state.seq = buildSequence(settings.pattern, settings.startNote, settings.upperNote);
+  if (!state.seq.length) { showNotice('上限音は開始音より長2度以上高くしてください。'); return; }
+  state.running = true;
+  state.index = 0;
+  state.sessionStart = performance.now();
+  state.limitNotified = false;
+  showNotice('');
+  requestWakeLock();
+  runStep();
+  tick();
+}
+
+function finish(completed) {
+  state.gen++;
+  silenceAll();
+  state.running = false;
+  state.phase = 'idle';
+  wakeLock?.release?.();
+  wakeLock = null;
+  showNotice(completed ? '最後まで終わりました。お疲れさまでした。' : '');
+  render();
+}
+
+// ---------- 画面 ----------
+const $ = (id) => document.getElementById(id);
+const els = {
+  phase: $('phase'), progress: $('progress'), notes: $('notes'), notice: $('notice'),
+  timer: $('timer'), canvas: $('view'),
+  startBtn: $('startBtn'), nextBtn: $('nextBtn'), runRow: $('runRow'),
+  prevBtn: $('prevBtn'), againBtn: $('againBtn'), stopBtn: $('stopBtn'),
+  settings: $('settings'),
+};
+
+const PHASE_LABEL = { idle: '準備', listen: 'お手本', gap: '…', sing: '歌って', result: 'おわり' };
+
+function showNotice(msg) { els.notice.textContent = msg; }
+
+function render() {
+  const running = state.running;
+  els.startBtn.hidden = running;
+  els.runRow.hidden = !running;
+  els.settings.hidden = running;
+  els.nextBtn.hidden = !running;
+  els.nextBtn.disabled = running && state.phase !== 'result';
+  els.prevBtn.disabled = state.index === 0;
+
+  els.phase.textContent = PHASE_LABEL[state.phase];
+  els.phase.className = 'phase ' + state.phase;
+
+  const step = running ? state.seq[state.index] : null;
+  if (step) {
+    let p = `${state.index + 1} / ${state.seq.length}`;
+    if (step.set) p = `セット ${step.set}/${step.setCount}・` + p;
+    els.progress.textContent = p;
+  } else {
+    els.progress.textContent = '';
+  }
+  renderNotes(step, -1);
+  drawView();
+}
+
+function renderNotes(step, activeIdx) {
+  if (!step) { els.notes.innerHTML = ''; return; }
+  els.notes.innerHTML = step.notes
+    .map((m, i) => `<span class="n${i === activeIdx ? ' on' : ''}">${noteName(m)}</span>`)
+    .join('<span class="sep">–</span>');
+}
+
+function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+
+function drawView() {
+  const cv = els.canvas;
+  const dpr = window.devicePixelRatio || 1;
+  const W = cv.clientWidth, H = cv.clientHeight;
+  if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)) {
+    cv.width = Math.round(W * dpr);
+    cv.height = Math.round(H * dpr);
+  }
+  const g = cv.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, W, H);
+
+  const colLine = cssVar('--line'), colMuted = cssVar('--muted');
+  const colBand = cssVar('--band'), colBandOn = cssVar('--band-active');
+  const colSing = cssVar('--sing'), colAccent = cssVar('--accent');
+
+  const step = state.running ? state.seq[state.index] : null;
+  const lo = step ? Math.min(...step.notes) - 2 : 48;
+  const hi = step ? Math.max(...step.notes) + 2 : 60;
+  const padL = 34, padT = 18, padB = 6;
+  const plotW = W - padL, plotH = H - padT - padB;
+  const y = (m) => padT + (hi - m) / (hi - lo) * plotH;
+
+  // 半音ごとの横線と音名
+  g.font = '11px -apple-system, sans-serif';
+  g.textBaseline = 'middle';
+  for (let m = lo; m <= hi; m++) {
+    const yy = y(m);
+    g.strokeStyle = colLine;
+    g.lineWidth = m % 12 === 0 ? 1 : 0.5;
+    g.beginPath(); g.moveTo(padL, yy); g.lineTo(W, yy); g.stroke();
+    if (step && step.notes.includes(m)) {
+      g.fillStyle = colMuted;
+      g.fillText(noteName(m), 2, yy);
+    }
+  }
+  if (!step) {
+    g.fillStyle = colMuted;
+    g.textAlign = 'center';
+    g.fillText('イヤホンをつけて「開始」を押してください', padL + plotW / 2, padT + plotH / 2);
+    g.textAlign = 'start';
+    return;
+  }
+
+  const { L, phrase, beat, total } = timing();
+  const x = (t) => padL + (t / total) * plotW;
+  const bandH = Math.max(6, plotH / (hi - lo) * 0.7);
+  const now = ctx ? ctx.currentTime - state.stepStart : 0;
+
+  // お手本区間と歌う区間の見出し
+  g.fillStyle = colMuted;
+  g.textBaseline = 'top';
+  g.fillText('お手本', x(0) + 2, 2);
+  g.fillText('歌う', x(phrase + beat) + 2, 2);
+  g.strokeStyle = colLine;
+  g.setLineDash([3, 3]);
+  g.beginPath(); g.moveTo(x(phrase + beat), padT); g.lineTo(x(phrase + beat), H - padB); g.stroke();
+  g.setLineDash([]);
+
+  // お手本の音（グレーの帯）
+  let activeIdx = -1;
+  [0, phrase + beat].forEach((offset) => {
+    step.notes.forEach((m, i) => {
+      const t0 = offset + i * (L + NOTE_GAP);
+      const on = now >= t0 && now < t0 + L;
+      if (on) activeIdx = i;
+      g.fillStyle = on ? colBandOn : colBand;
+      roundRect(g, x(t0), y(m) - bandH / 2, x(t0 + L) - x(t0), bandH, 4);
+      g.fill();
+    });
+  });
+
+  // 再生位置
+  if (state.phase !== 'result' && now >= 0 && now <= total) {
+    g.strokeStyle = state.phase === 'sing' ? colSing : colAccent;
+    g.lineWidth = 2;
+    g.beginPath(); g.moveTo(x(now), padT); g.lineTo(x(now), H - padB); g.stroke();
+  }
+  renderNotes(step, activeIdx);
+}
+
+function roundRect(g, x, y, w, h, r) {
+  g.beginPath();
+  g.moveTo(x + r, y);
+  g.arcTo(x + w, y, x + w, y + h, r);
+  g.arcTo(x + w, y + h, x, y + h, r);
+  g.arcTo(x, y + h, x, y, r);
+  g.arcTo(x, y, x + w, y, r);
+  g.closePath();
+}
+
+function fmtTime(sec) {
+  const s = Math.floor(sec);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+function tick() {
+  if (!state.running) { els.timer.textContent = '0:00'; els.timer.classList.remove('over'); return; }
+  const e = elapsed();
+  els.timer.textContent = fmtTime(e);
+  els.timer.classList.toggle('over', e >= SESSION_LIMIT);
+  drawView();
+  requestAnimationFrame(tick);
+}
+
+// ---------- 設定UI ----------
+function fillNoteSelect(sel, from, to) {
+  sel.innerHTML = '';
+  for (let m = from; m <= to; m++) {
+    const o = document.createElement('option');
+    o.value = m; o.textContent = noteName(m);
+    sel.appendChild(o);
+  }
+}
+
+function syncSettingsUI() {
+  $('patA').checked = settings.pattern === 'A';
+  $('patB').checked = settings.pattern === 'B';
+  $('patternHint').textContent = settings.pattern === 'A'
+    ? 'C-D-C → C#-D#-C# …'
+    : 'C-D-C → C-E-C → C-F-C …';
+  $('startNote').value = settings.startNote;
+  $('upperNote').value = settings.upperNote;
+  $('noteLen').value = settings.noteLen;
+  $('noteLenVal').textContent = settings.noteLen.toFixed(1) + '秒';
+  $('auto').checked = settings.auto;
+  $('volume').value = settings.volume;
+  $('volumeVal').textContent = Math.round(settings.volume * 100) + '%';
+
+  const seq = buildSequence(settings.pattern, settings.startNote, settings.upperNote);
+  const t = timing();
+  const perStep = t.total + (settings.auto ? 1.0 : 1.5);
+  $('summary').textContent = seq.length
+    ? `全 ${seq.length} 回・最後まで通すと約 ${Math.ceil(seq.length * perStep / 60)} 分（5分で約 ${Math.floor(SESSION_LIMIT / perStep)} 回）`
+    : '上限音は開始音より長2度以上高くしてください。';
+}
+
+function bindSettings() {
+  fillNoteSelect($('startNote'), 40, 72);  // E2〜C5
+  fillNoteSelect($('upperNote'), 44, 79);  // G#2〜G5
+  document.querySelectorAll('input[name="pattern"]').forEach((r) =>
+    r.addEventListener('change', () => { settings.pattern = r.value; changed(); }));
+  $('startNote').addEventListener('change', (e) => { settings.startNote = +e.target.value; changed(); });
+  $('upperNote').addEventListener('change', (e) => { settings.upperNote = +e.target.value; changed(); });
+  $('noteLen').addEventListener('input', (e) => { settings.noteLen = +e.target.value; changed(); });
+  $('auto').addEventListener('change', (e) => { settings.auto = e.target.checked; changed(); });
+  $('volume').addEventListener('input', (e) => {
+    settings.volume = +e.target.value;
+    if (master) master.gain.value = settings.volume;
+    changed();
+  });
+  function changed() { saveSettings(); syncSettingsUI(); }
+  syncSettingsUI();
+}
+
+// ---------- 起動 ----------
+els.startBtn.addEventListener('click', start);
+els.nextBtn.addEventListener('click', () => advance(1));
+els.prevBtn.addEventListener('click', () => advance(-1));
+els.againBtn.addEventListener('click', () => { ensureAudio(); advance(0); });
+els.stopBtn.addEventListener('click', () => finish(false));
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && state.running) {
+    ensureAudio();
+    requestWakeLock();
+  }
+});
+window.addEventListener('resize', drawView);
+
+bindSettings();
+render();
+
+if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  navigator.serviceWorker.register('sw.js').catch(() => {});
+}
+</script>
+</body>
+</html>

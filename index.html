@@ -70,6 +70,13 @@
   .phase.listen { background: var(--ink); color: #fff; }
   .phase.sing { background: var(--ig); color: #fff; animation: pulse 0.9s ease-in-out infinite alternate; }
   @keyframes pulse { to { transform: scale(1.06); } }
+  .meter { flex: 1; max-width: 90px; height: 6px; border-radius: 3px; background: var(--soft); overflow: hidden; margin-left: auto; }
+  .meter i { display: block; height: 100%; width: 0; background: var(--line); border-radius: 3px; }
+  .meter.voiced i { background: var(--blue); }
+  .mictest { display: flex; align-items: center; gap: 10px; padding: 12px 0; border-bottom: 1px solid var(--soft); }
+  .mictest button { padding: 8px 14px; font-size: 14px; flex: none; }
+  .mictest .meter { max-width: none; height: 8px; margin: 0; }
+  .mictest output { min-width: 5.5em; text-align: right; font-size: 14px; font-weight: 700; font-variant-numeric: tabular-nums; }
   .progress { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
   .notes {
     font-size: 34px; font-weight: 800; letter-spacing: 0.01em;
@@ -185,6 +192,7 @@
   <section class="stage" id="stage">
     <div class="status-row">
       <span class="phase" id="phase">準備</span>
+      <span class="meter" id="meter" hidden><i></i></span>
       <span class="progress" id="progress"></span>
     </div>
     <div class="notes" id="notes"></div>
@@ -230,8 +238,25 @@
         <span class="switch"><input type="checkbox" id="auto"><span></span></span>
       </div>
       <div class="field">
-        <label for="useMic">マイクで判定<small>イヤホン必須。お手本の音を拾わないように</small></label>
+        <label>歌う番のピアノ<small>歌う間も同じ音を鳴らす</small></label>
+        <span class="seg">
+          <input type="radio" name="guide" id="guideOff" value="off"><label for="guideOff">なし</label>
+          <input type="radio" name="guide" id="guideSoft" value="soft"><label for="guideSoft">小さめ</label>
+          <input type="radio" name="guide" id="guideSame" value="same"><label for="guideSame">同じ</label>
+        </span>
+      </div>
+      <div class="field">
+        <label for="useMic">マイクで判定<small>イヤホン推奨。ピアノの音を拾うと判定がずれる</small></label>
         <span class="switch"><input type="checkbox" id="useMic"><span></span></span>
+      </div>
+      <div class="field">
+        <label for="micGain">マイク感度<small>声を拾いにくいときは上げる</small></label>
+        <span><input type="range" id="micGain" min="1" max="12" step="0.5"><span class="val" id="micGainVal"></span></span>
+      </div>
+      <div class="mictest">
+        <button id="micTestBtn">マイクテスト</button>
+        <span class="meter" id="testMeter"><i></i></span>
+        <output id="testNote">—</output>
       </div>
       <div class="field">
         <label for="volume">音量</label>
@@ -260,9 +285,12 @@ const DEFAULTS = {
   upperNote: 69,  // A4
   noteLen: 0.5,
   auto: false,
+  guide: 'soft',   // 歌う番のピアノ: off | soft | same
   useMic: true,
+  micGain: 3,      // マイク感度（増幅の倍率）
   volume: 0.8,
 };
+const GUIDE_LEVEL = { off: 0, soft: 0.4, same: 1 };
 const NOTE_GAP = 0.05;         // 音と音の間（秒）
 const SING_TAIL = 0.3;         // 歌う区間の後ろに足す余裕（遅れて歌い出しても拾う）
 const RESULT_PAUSE = 0.7;      // 自動進行で結果を見せる時間
@@ -309,10 +337,21 @@ function buildSequence(pattern, start, upper) {
   return out;
 }
 
-// ---------- 音源（ピアノ風の合成音） ----------
+// ---------- 音源（ピアノの録音: Salamander Grand Piano） ----------
+// 短3度おきに録音があるので、一番近い録音の再生速度を変えて間の音を作る（ずらすのは最大1.5半音）
+const PIANO_NAMES = ['C', 'Ds', 'Fs', 'A'];
+const PIANO_SAMPLES = [];
+for (let oct = 2; oct <= 5; oct++) {
+  PIANO_NAMES.forEach((n, i) => PIANO_SAMPLES.push({ midi: (oct + 1) * 12 + i * 3, file: `piano/${n}${oct}.mp3` }));
+}
+// 画面を開いた時点で読み込み始めておく（デコードは AudioContext ができてから）
+const pianoFetch = Promise.all(PIANO_SAMPLES.map((s) =>
+  fetch(s.file).then((r) => { if (!r.ok) throw new Error(s.file); return r.arrayBuffer(); })));
+pianoFetch.catch(() => {});
+let pianoReady = null;
+
 let ctx = null;
 let master = null;
-let noiseBuf = null;
 let activeNotes = [];
 
 function ensureAudio() {
@@ -322,91 +361,55 @@ function ensureAudio() {
       try { navigator.audioSession.type = settings.useMic ? 'play-and-record' : 'playback'; } catch (e) { /* 未対応なら無視 */ }
     }
     ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 });
-    const comp = ctx.createDynamicsCompressor();
-    comp.threshold.value = -10;
-    comp.ratio.value = 4;
     master = ctx.createGain();
     master.gain.value = settings.volume;
-    master.connect(comp).connect(ctx.destination);
-    noiseBuf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 0.05), ctx.sampleRate);
-    const d = noiseBuf.getChannelData(0);
-    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    master.connect(ctx.destination);
   }
   if (ctx.state !== 'running') ctx.resume();
   return ctx;
 }
 
-// 倍音ごとに減衰の速さを変え、高い倍音ほど早く消える。弦の硬さによる倍音のずれ（inharmonicity）も少し入れる
-const PARTIALS = [1, 0.6, 0.38, 0.24, 0.15, 0.1, 0.065, 0.04];
-const INHARMONIC_B = 0.0004;
+function loadPiano() {
+  if (!pianoReady) {
+    pianoReady = pianoFetch
+      .then((bufs) => Promise.all(bufs.map((b) => ctx.decodeAudioData(b))))
+      .then((decoded) => { decoded.forEach((d, i) => { PIANO_SAMPLES[i].buffer = d; }); });
+    pianoReady.catch(() => { pianoReady = null; });
+  }
+  return pianoReady;
+}
+
 const RELEASE = 0.3;
 
-function playNote(midi, t0, dur) {
-  const f = midiToFreq(midi);
+// level: お手本は 1、歌う番のガイドは小さめにできる
+function playNote(midi, t0, dur, level = 1) {
+  let best = PIANO_SAMPLES[0];
+  for (const s of PIANO_SAMPLES) if (Math.abs(s.midi - midi) < Math.abs(best.midi - midi)) best = s;
+  if (!best.buffer) return;
+  const src = ctx.createBufferSource();
+  src.buffer = best.buffer;
+  src.playbackRate.value = Math.pow(2, (midi - best.midi) / 12);
   const out = ctx.createGain();
-  out.gain.setValueAtTime(0.22, t0);
-  out.gain.setValueAtTime(0.22, t0 + dur);
-  out.gain.setTargetAtTime(0, t0 + dur, RELEASE / 4);  // ダンパーで止める
-
-  // 打鍵直後は明るく、だんだん丸くなる
-  const lp = ctx.createBiquadFilter();
-  lp.type = 'lowpass';
-  lp.Q.value = 0.4;
-  lp.frequency.setValueAtTime(Math.min(f * 16, 14000), t0);
-  lp.frequency.setTargetAtTime(Math.min(f * 5, 8000), t0 + 0.01, 0.35);
-  lp.connect(out).connect(master);
-
-  const sustainT = Math.min(3, Math.max(0.8, 2.4 * Math.sqrt(261.6 / f)));
-  const stopAt = t0 + dur + RELEASE + 0.05;
-  const oscs = [];
-  const addPartial = (freq, amp, n) => {
-    const o = ctx.createOscillator();
-    const g = ctx.createGain();
-    o.frequency.value = freq;
-    g.gain.setValueAtTime(0, t0);
-    g.gain.linearRampToValueAtTime(amp, t0 + 0.004);
-    g.gain.setTargetAtTime(amp * 0.5, t0 + 0.004, 0.05 + 0.1 / n);  // 最初の素早い減衰
-    g.gain.setTargetAtTime(0, t0 + 0.12, sustainT / (1 + 0.5 * (n - 1)));  // その後のゆっくりした減衰
-    o.connect(g).connect(lp);
-    o.start(t0);
-    o.stop(stopAt);
-    oscs.push(o);
-  };
-  PARTIALS.forEach((a, i) => {
-    const n = i + 1;
-    const fn = n * f * Math.sqrt(1 + INHARMONIC_B * n * n);
-    if (fn < 16000) addPartial(fn, a, n);
-  });
-  addPartial(f * Math.pow(2, 1.2 / 1200), 0.45, 1);  // 2本目の弦をわずかにずらしてうなりを出す
-
-  // ハンマーの打撃音
-  const nz = ctx.createBufferSource();
-  nz.buffer = noiseBuf;
-  const bp = ctx.createBiquadFilter();
-  bp.type = 'bandpass';
-  bp.frequency.value = Math.min(f * 4, 5000);
-  bp.Q.value = 0.8;
-  const ng = ctx.createGain();
-  ng.gain.setValueAtTime(0.35, t0);
-  ng.gain.setTargetAtTime(0, t0, 0.008);
-  nz.connect(bp).connect(ng).connect(lp);
-  nz.start(t0);
-  oscs.push(nz);
-
-  const rec = { out, oscs };
+  out.gain.setValueAtTime(level, t0);
+  out.gain.setValueAtTime(level, t0 + dur);
+  out.gain.setTargetAtTime(0, t0 + dur, RELEASE / 4);  // 鍵盤を離したときのように止める
+  src.connect(out).connect(master);
+  src.start(t0);
+  src.stop(t0 + dur + RELEASE + 0.1);
+  const rec = { out, src };
   activeNotes.push(rec);
-  oscs[0].onended = () => { activeNotes = activeNotes.filter((r) => r !== rec); };
+  src.onended = () => { activeNotes = activeNotes.filter((r) => r !== rec); };
 }
 
 function silenceAll() {
   if (!ctx) return;
   const now = ctx.currentTime;
-  for (const { out, oscs } of activeNotes) {
+  for (const { out, src } of activeNotes) {
     try {
       out.gain.cancelScheduledValues(now);
       out.gain.setValueAtTime(out.gain.value, now);
       out.gain.linearRampToValueAtTime(0, now + 0.03);
-      oscs.forEach((o) => o.stop(now + 0.05));
+      src.stop(now + 0.05);
     } catch (e) { /* 既に停止済み */ }
   }
   activeNotes = [];
@@ -414,10 +417,12 @@ function silenceAll() {
 
 // ---------- マイクとピッチ検出 ----------
 let analyser = null;
+let micGain = null;
 let micBuf = null;
 let nsdf = null;
-const RMS_MIN = 0.01;
-const CLARITY_MIN = 0.8;
+let micLevel = 0;      // 直近の入力の大きさ（RMS、感度をかけた後）
+const RMS_MIN = 0.006;
+const CLARITY_MIN = 0.7;
 const F_MIN = 70, F_MAX = 1100;
 
 async function ensureMic() {
@@ -428,9 +433,12 @@ async function ensureMic() {
       audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
     });
     const src = ctx.createMediaStreamSource(stream);
+    // 小さい声やマイクの性能不足を補うため、感度の設定ぶん増幅してから解析する
+    micGain = ctx.createGain();
+    micGain.gain.value = settings.micGain;
     analyser = ctx.createAnalyser();
     analyser.fftSize = 2048;
-    src.connect(analyser);
+    src.connect(micGain).connect(analyser);
     micBuf = new Float32Array(analyser.fftSize);
     nsdf = new Float32Array(Math.ceil(ctx.sampleRate / F_MIN) + 2);
     return true;
@@ -445,6 +453,7 @@ function detectPitch(buf, sr) {
   let rms = 0;
   for (let i = 0; i < N; i++) rms += buf[i] * buf[i];
   rms = Math.sqrt(rms / N);
+  micLevel = rms;
   if (rms < RMS_MIN) return null;
 
   const maxTau = Math.min(Math.ceil(sr / F_MIN), N >> 1);
@@ -528,6 +537,11 @@ async function runStep() {
   state.samples = [];
   state.result = null;
   step.notes.forEach((m, i) => playNote(m, t0 + i * (L + NOTE_GAP), L));
+  const guide = GUIDE_LEVEL[settings.guide] || 0;
+  if (guide) {
+    const { singStart } = timing();
+    step.notes.forEach((m, i) => playNote(m, t0 + singStart + i * (L + NOTE_GAP), L, guide));
+  }
   try {
     setPhase('listen');
     await wait(phrase + 0.06, gen);
@@ -585,8 +599,19 @@ async function requestWakeLock() {
 
 async function start() {
   ensureAudio();
+  stopMicTest();
   state.seq = buildSequence(settings.pattern, settings.startNote, settings.upperNote);
   if (!state.seq.length) { showNotice('上限音は開始音より長2度以上高くしてください。'); return; }
+  els.startBtn.disabled = true;
+  showNotice('ピアノを読み込み中…');
+  try {
+    await loadPiano();
+  } catch (e) {
+    els.startBtn.disabled = false;
+    showNotice('ピアノの音を読み込めませんでした。通信状態を確認してください。');
+    return;
+  }
+  els.startBtn.disabled = false;
   showNotice('');
   state.micOk = settings.useMic ? await ensureMic() : false;
   if (settings.useMic && !state.micOk) showNotice('マイクが使えないので、判定なしで進みます。');
@@ -700,7 +725,7 @@ function clearCelebration() {
 const $ = (id) => document.getElementById(id);
 const els = {
   stage: $('stage'), phase: $('phase'), progress: $('progress'), notes: $('notes'),
-  results: $('results'), notice: $('notice'), timer: $('timer'), canvas: $('view'),
+  results: $('results'), meter: $('meter'), notice: $('notice'), timer: $('timer'), canvas: $('view'),
   startBtn: $('startBtn'), nextBtn: $('nextBtn'), runRow: $('runRow'),
   prevBtn: $('prevBtn'), againBtn: $('againBtn'), stopBtn: $('stopBtn'),
   settings: $('settings'),
@@ -716,6 +741,7 @@ function render() {
   els.runRow.hidden = !running;
   els.settings.hidden = running;
   els.nextBtn.hidden = !running;
+  els.meter.hidden = !(running && state.micOk);
   els.prevBtn.disabled = state.index === 0;
 
   els.phase.textContent = PHASE_LABEL[state.phase];
@@ -898,16 +924,51 @@ function fmtTime(sec) {
 
 function tick() {
   if (!state.running) { els.timer.textContent = '0:00'; els.timer.classList.remove('over'); return; }
-  if (state.recording && analyser) {
+  if (analyser && state.micOk) {
     analyser.getFloatTimeDomainData(micBuf);
     const f = detectPitch(micBuf, ctx.sampleRate);
-    if (f) state.samples.push({ t: ctx.currentTime - state.stepStart, m: freqToMidi(f) });
+    if (f && state.recording) state.samples.push({ t: ctx.currentTime - state.stepStart, m: freqToMidi(f) });
+    drawMeter(els.meter, f);
   }
   const e = elapsed();
   els.timer.textContent = fmtTime(e);
   els.timer.classList.toggle('over', e >= SESSION_LIMIT);
   drawView();
   requestAnimationFrame(tick);
+}
+
+// 入力レベルのメーター。音程が取れているときは青
+function drawMeter(el, freq) {
+  const db = 20 * Math.log10(Math.max(micLevel, 1e-4));
+  el.firstElementChild.style.width = Math.min(100, Math.max(0, (db + 60) / 50 * 100)) + '%';
+  el.classList.toggle('voiced', !!freq);
+}
+
+let micTesting = false;
+async function toggleMicTest() {
+  if (micTesting) { stopMicTest(); return; }
+  ensureAudio();
+  if (!(await ensureMic())) { $('testNote').textContent = '使えません'; return; }
+  micTesting = true;
+  $('micTestBtn').textContent = '止める';
+  const loop = () => {
+    if (!micTesting) return;
+    analyser.getFloatTimeDomainData(micBuf);
+    const f = detectPitch(micBuf, ctx.sampleRate);
+    drawMeter($('testMeter'), f);
+    if (f) {
+      const m = freqToMidi(f), r = Math.round(m);
+      $('testNote').textContent = `${noteName(r)} ${fmtCents((m - r) * 100)}`;
+    }
+    requestAnimationFrame(loop);
+  };
+  loop();
+}
+function stopMicTest() {
+  micTesting = false;
+  $('micTestBtn').textContent = 'マイクテスト';
+  $('testMeter').firstElementChild.style.width = '0';
+  $('testNote').textContent = '—';
 }
 
 // ---------- 設定UI ----------
@@ -932,6 +993,9 @@ function syncSettingsUI() {
   $('noteLenVal').textContent = settings.noteLen.toFixed(2) + '秒';
   $('auto').checked = settings.auto;
   $('useMic').checked = settings.useMic;
+  $('guide' + { off: 'Off', soft: 'Soft', same: 'Same' }[settings.guide]).checked = true;
+  $('micGain').value = settings.micGain;
+  $('micGainVal').textContent = '×' + settings.micGain;
   $('volume').value = settings.volume;
   $('volumeVal').textContent = Math.round(settings.volume * 100) + '%';
 
@@ -952,6 +1016,14 @@ function bindSettings() {
   $('noteLen').addEventListener('input', (e) => { settings.noteLen = +e.target.value; changed(); });
   $('auto').addEventListener('change', (e) => { settings.auto = e.target.checked; changed(); });
   $('useMic').addEventListener('change', (e) => { settings.useMic = e.target.checked; changed(); });
+  document.querySelectorAll('input[name="guide"]').forEach((r) =>
+    r.addEventListener('change', () => { settings.guide = r.value; changed(); }));
+  $('micGain').addEventListener('input', (e) => {
+    settings.micGain = +e.target.value;
+    if (micGain) micGain.gain.value = settings.micGain;
+    changed();
+  });
+  $('micTestBtn').addEventListener('click', toggleMicTest);
   $('volume').addEventListener('input', (e) => {
     settings.volume = +e.target.value;
     if (master) master.gain.value = settings.volume;

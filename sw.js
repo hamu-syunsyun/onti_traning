@@ -1,5 +1,5 @@
 // ネット優先・失敗したらキャッシュ。更新をすぐ反映しつつオフラインでも開けるようにする
-const CACHE = 'pitch-trainer-v1';
+const CACHE = 'pitch-trainer-v2';
 const ASSETS = ['./', 'index.html', 'manifest.webmanifest', 'icon.svg', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', (e) => {

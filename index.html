@@ -180,6 +180,14 @@
   .seg input:checked + label { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
   .val { font-variant-numeric: tabular-nums; min-width: 3.2em; text-align: right; display: inline-block; color: var(--muted); font-size: 14px; }
   .summary { font-size: 13px; color: var(--muted); margin: 10px 2px 0; }
+  .field.stack { flex-direction: column; align-items: stretch; gap: 8px; }
+  .field.stack .seg, .field.stack select { align-self: flex-start; }
+  .notes .tech {
+    font-size: 18px; font-weight: 800; margin-left: 0.4em; padding: 2px 12px; border-radius: 999px;
+    background: var(--ig); color: #fff; vertical-align: 0.35em;
+  }
+  .tech-hint { font-size: 13px; color: var(--muted); margin: -4px 0 6px; min-height: 0; }
+  .bubble.wide { grid-column: span 3; }
 </style>
 </head>
 <body>
@@ -196,6 +204,7 @@
       <span class="progress" id="progress"></span>
     </div>
     <div class="notes" id="notes"></div>
+    <div class="tech-hint" id="techHint"></div>
     <canvas id="view"></canvas>
     <div class="results" id="results"></div>
     <div class="notice" id="notice"></div>
@@ -214,12 +223,24 @@
   <section class="settings" id="settings">
     <h2>設定</h2>
     <div class="stage">
-      <div class="field">
+      <div class="field stack">
         <label>パターン<small id="patternHint"></small></label>
         <span class="seg">
           <input type="radio" name="pattern" id="patA" value="A"><label for="patA">A 移動</label>
           <input type="radio" name="pattern" id="patB" value="B"><label for="patB">B 基準音</label>
+          <input type="radio" name="pattern" id="patT" value="T"><label for="patT">テクニック</label>
         </span>
+      </div>
+      <div class="field stack" id="techField">
+        <label for="tech">練習するテクニック<small id="techFieldHint"></small></label>
+        <select id="tech">
+          <option value="mix">おまかせ（順番に）</option>
+          <option value="scoop">しゃくり</option>
+          <option value="fall">フォール</option>
+          <option value="accent">アクセント</option>
+          <option value="vibrato">ビブラート</option>
+          <option value="kobushi">こぶし</option>
+        </select>
       </div>
       <div class="field">
         <label for="startNote">開始音</label>
@@ -229,7 +250,7 @@
         <label for="upperNote">上限音</label>
         <select id="upperNote"></select>
       </div>
-      <div class="field">
+      <div class="field" id="noteLenField">
         <label for="noteLen">1音の長さ</label>
         <span><input type="range" id="noteLen" min="0.3" max="1.5" step="0.05"><span class="val" id="noteLenVal"></span></span>
       </div>
@@ -280,7 +301,8 @@ const cents = (f, fRef) => 1200 * Math.log2(f / fRef);
 // ---------- 設定 ----------
 const SETTINGS_KEY = 'pitch-trainer:settings:v2';
 const DEFAULTS = {
-  pattern: 'A',
+  pattern: 'A',    // A | B | T（テクニック）
+  tech: 'scoop',   // テクニックモードで練習する技（mix は順番に全部）
   startNote: 48,  // C3
   upperNote: 69,  // A4
   noteLen: 0.5,
@@ -318,7 +340,14 @@ let settings = loadSettings();
 // パターンB で広げていく音程（半音数）: 長2度, 長3度, 完全4度, 完全5度, 長6度, 長7度, オクターブ
 const B_INTERVALS = [2, 4, 5, 7, 9, 11, 12];
 
-function buildSequence(pattern, start, upper) {
+function buildSequence(pattern, start, upper, tech = 'scoop') {
+  if (pattern === 'T') {
+    // 1回 = 長めの1音にテクニックを1つ。全音ずつ上がって下がる
+    const up = [];
+    for (let m = start; m <= upper; m += 2) up.push(m);
+    const notes = up.concat(up.slice(0, -1).reverse());
+    return notes.map((m, i) => ({ notes: [m], tech: tech === 'mix' ? TECH_ORDER[i % TECH_ORDER.length] : tech }));
+  }
   if (pattern === 'A') {
     const up = [];
     for (let s = start; s + 2 <= upper; s++) up.push({ notes: [s, s + 2, s] });
@@ -335,6 +364,74 @@ function buildSequence(pattern, start, upper) {
   const out = [];
   all.forEach((steps, si) => steps.forEach((st) => out.push({ ...st, set: si + 1, setCount: all.length })));
   return out;
+}
+
+// ---------- テクニック ----------
+// 各テクニックのお手本の動き。u は音の頭からの秒、T は音の長さ。cents は目標音からのズレ、gain は声の大きさ
+const TECH_LEN = 1.6;
+const TECH = {
+  scoop: {
+    name: 'しゃくり',
+    hint: '目標より低いところから入り、すばやく目標の音まで上げる',
+    cents: (u) => (u < 0.3 ? -150 * (1 - u / 0.3) ** 2 : 0),
+  },
+  fall: {
+    name: 'フォール',
+    hint: '音をまっすぐ伸ばし、終わりで音程を下に落としながら抜く',
+    cents: (u, T) => (u < T - 0.4 ? 0 : -350 * ((u - (T - 0.4)) / 0.4) ** 2),
+    gain: (u, T) => (u < T - 0.4 ? 1 : 1 - 0.8 * (u - (T - 0.4)) / 0.4),
+  },
+  accent: {
+    name: 'アクセント',
+    hint: '出だしだけ強く押し出して、すぐ普通の大きさに戻す',
+    cents: () => 0,
+    gain: (u) => (u < 0.15 ? 1 : u < 0.25 ? 1 - 0.6 * (u - 0.15) / 0.1 : 0.4),
+  },
+  vibrato: {
+    name: 'ビブラート',
+    hint: 'まっすぐ伸ばしてから、音程を小さく揺らす（1秒に5〜6回）',
+    cents: (u) => (u < 0.4 ? 0 : 40 * Math.sin(2 * Math.PI * 5.5 * (u - 0.4)) * Math.min(1, (u - 0.4) / 0.2)),
+  },
+  kobushi: {
+    name: 'こぶし',
+    hint: '伸ばしている途中で、一瞬だけ音を上げてすぐ戻す',
+    cents: (u, T) => {
+      const a = T * 0.45, w = 0.22;
+      return u >= a && u < a + w ? 100 * Math.sin(Math.PI * (u - a) / w) : 0;
+    },
+  },
+};
+const TECH_ORDER = ['scoop', 'fall', 'accent', 'vibrato', 'kobushi'];
+
+// お手本の動きは、音程をなめらかに動かせる声に近い音で鳴らす（ピアノでは音程を滑らせられないため）
+function playDemo(step, t0) {
+  const info = TECH[step.tech];
+  const T = TECH_LEN;
+  const f = midiToFreq(step.notes[0]);
+  const N = 256;
+  const freq = new Float32Array(N), gain = new Float32Array(N);
+  for (let i = 0; i < N; i++) {
+    const u = (i / (N - 1)) * T;
+    freq[i] = f * Math.pow(2, info.cents(u, T) / 1200);
+    const env = Math.min(1, u / 0.04) * Math.min(1, (T - u) / 0.08);
+    gain[i] = 0.32 * env * (info.gain ? info.gain(u, T) : 0.6);
+  }
+  const osc = ctx.createOscillator();
+  osc.type = 'sawtooth';
+  osc.frequency.setValueCurveAtTime(freq, t0, T);
+  const lp = ctx.createBiquadFilter();
+  lp.type = 'lowpass';
+  lp.frequency.value = Math.min(2400, f * 6);
+  lp.Q.value = 0.7;
+  const out = ctx.createGain();
+  out.gain.setValueAtTime(0, t0);
+  out.gain.setValueCurveAtTime(gain, t0, T);
+  osc.connect(lp).connect(out).connect(master);
+  osc.start(t0);
+  osc.stop(t0 + T + 0.05);
+  const rec = { out, src: osc };
+  activeNotes.push(rec);
+  osc.onended = () => { activeNotes = activeNotes.filter((r) => r !== rec); };
 }
 
 // ---------- 音源（ピアノの録音: Salamander Grand Piano） ----------
@@ -508,13 +605,15 @@ const state = {
   micOk: false,
   recording: false,
   samples: [],        // { t: ステップ開始からの秒, m: MIDI 番号（小数） }
+  levels: [],         // { t, r: 入力の大きさ }。アクセントの判定に使う
   result: null,
 };
 
-function timing() {
-  const L = settings.noteLen;
-  const phrase = 3 * L + 2 * NOTE_GAP;
-  const beat = L;
+function timing(step) {
+  const tech = step && step.tech;
+  const L = tech ? TECH_LEN : settings.noteLen;
+  const phrase = tech ? L : 3 * L + 2 * NOTE_GAP;
+  const beat = tech ? 0.6 : L;
   const singStart = phrase + beat;
   return { L, phrase, beat, singStart, total: singStart + phrase + SING_TAIL };
 }
@@ -531,15 +630,16 @@ async function runStep() {
   silenceAll();
   clearCelebration();
   const step = state.seq[state.index];
-  const { L, phrase, beat } = timing();
+  const { L, phrase, beat, singStart } = timing(step);
   const t0 = ctx.currentTime + 0.06;
   state.stepStart = t0;
   state.samples = [];
+  state.levels = [];
   state.result = null;
-  step.notes.forEach((m, i) => playNote(m, t0 + i * (L + NOTE_GAP), L));
+  if (step.tech) playDemo(step, t0);
+  else step.notes.forEach((m, i) => playNote(m, t0 + i * (L + NOTE_GAP), L));
   const guide = GUIDE_LEVEL[settings.guide] || 0;
   if (guide) {
-    const { singStart } = timing();
     step.notes.forEach((m, i) => playNote(m, t0 + singStart + i * (L + NOTE_GAP), L, guide));
   }
   try {
@@ -554,7 +654,7 @@ async function runStep() {
     await wait(phrase + SING_TAIL, gen);
     state.recording = false;
     if (state.micOk) {
-      state.result = evaluate(step, state.samples);
+      state.result = step.tech ? evaluateTech(step, state.samples, state.levels) : evaluate(step, state.samples);
       celebrate(state.result);
     }
     setPhase('result');
@@ -600,7 +700,7 @@ async function requestWakeLock() {
 async function start() {
   ensureAudio();
   stopMicTest();
-  state.seq = buildSequence(settings.pattern, settings.startNote, settings.upperNote);
+  state.seq = buildSequence(settings.pattern, settings.startNote, settings.upperNote, settings.tech);
   if (!state.seq.length) { showNotice('上限音は開始音より長2度以上高くしてください。'); return; }
   els.startBtn.disabled = true;
   showNotice('ピアノを読み込み中…');
@@ -646,7 +746,7 @@ function foldCents(c) {
 
 // 各音の時間枠。歌い出しの遅れ（早さ）に合わせて枠をずらす
 function noteWindows(step, samples) {
-  const { L, phrase, singStart } = timing();
+  const { L, phrase, singStart } = timing(step);
   const first = samples.find((s) => s.t >= singStart - 0.3 && s.t <= singStart + phrase);
   const offset = first ? Math.min(0.4, Math.max(-0.2, first.t - singStart)) : 0;
   return step.notes.map((m, i) => {
@@ -693,6 +793,108 @@ function evaluate(step, samples) {
   return { notes, windows, perfect, good };
 }
 
+const median = (a) => { const b = [...a].sort((x, y) => x - y); return b[Math.floor(b.length / 2)]; };
+
+// テクニックの判定。歌い出し（最初に声が取れた時刻）を音の頭とみなして、お手本と同じ形になっているかを見る
+function evaluateTech(step, samples, levels) {
+  const info = TECH[step.tech];
+  const T = TECH_LEN;
+  const windows = noteWindows(step, samples);
+  const w = windows[0];
+  const s0 = w.start;
+  const pts = samples
+    .filter((s) => s.t >= s0 - 0.05 && s.t <= s0 + T + SING_TAIL)
+    .map((s) => ({ u: s.t - s0, c: foldCents((s.m - w.target) * 100) }));
+  const base = { tech: step.tech, name: info.name, windows, ok: false, perfect: false, good: false };
+  if (pts.length < 8) return { ...base, hold: null, metric: '—', advice: '声が取れませんでした。マイク感度を上げてみてください' };
+
+  const inRange = (a, b) => pts.filter((p) => p.u >= a && p.u <= b).map((p) => p.c);
+  const avgOf = (arr) => (arr.length >= 3 ? mean(arr) : null);
+  let hold = null, ok = false, metric = '', advice = '';
+
+  if (step.tech === 'scoop') {
+    hold = avgOf(inRange(0.45, T - 0.2));
+    const early = inRange(-0.05, 0.1);
+    const startC = early.length ? Math.min(...early) : pts[0].c;
+    const ref = hold ?? 0;
+    let reach = null;
+    for (let i = 0; i + 2 < pts.length; i++) {
+      if ([0, 1, 2].every((k) => Math.abs(pts[i + k].c - ref) <= 25)) { reach = pts[i].u; break; }
+    }
+    const depth = startC - ref;
+    ok = depth <= -40 && reach != null && reach <= 0.5;
+    metric = `${fmtCents(depth)}¢から ${reach == null ? '—' : reach.toFixed(2) + '秒'}`;
+    advice = depth > -40 ? 'もっと下から入ってみよう'
+      : reach == null || reach > 0.5 ? '目標の音まで早めに上げきろう'
+      : depth < -300 ? '下からが深すぎ。半音〜1音下くらいで十分' : 'きれいにしゃくれています';
+  } else if (step.tech === 'fall') {
+    hold = avgOf(inRange(0.2, T - 0.5));
+    const tail = inRange(T - 0.5, T + SING_TAIL);
+    const drop = hold != null && tail.length ? hold - Math.min(...tail) : 0;
+    ok = hold != null && drop >= 100;
+    metric = `落とし幅 ${fmtCents(-drop)}¢`;
+    advice = hold == null ? 'まずはまっすぐ伸ばしてから落とそう'
+      : drop < 100 ? '終わりでもっと大きく下に落とそう' : 'きれいに落とせています';
+  } else if (step.tech === 'accent') {
+    hold = avgOf(inRange(0.25, T - 0.2));
+    const lv = levels.filter((l) => l.t >= s0 - 0.05 && l.t <= s0 + T).map((l) => ({ u: l.t - s0, r: l.r }));
+    const peakArr = lv.filter((l) => l.u <= 0.2).map((l) => l.r);
+    const bodyArr = lv.filter((l) => l.u >= 0.35 && l.u <= T - 0.2).map((l) => l.r);
+    const db = peakArr.length && bodyArr.length ? 20 * Math.log10(Math.max(...peakArr) / Math.max(median(bodyArr), 1e-4)) : 0;
+    ok = db >= 4;
+    metric = `出だし ${db >= 0 ? '+' : '−'}${Math.abs(db).toFixed(1)}dB`;
+    advice = ok ? '出だしが立っています' : '出だしをもっと強く、そのあとは力を抜こう';
+  } else if (step.tech === 'vibrato') {
+    const seg = pts.filter((p) => p.u >= 0.4 && p.u <= T);
+    hold = seg.length >= 3 ? mean(seg.map((p) => p.c)) : null;
+    // ゆっくりした音程の流れを引いて、揺れの成分だけを取り出す
+    const det = seg.map((p) => {
+      const near = seg.filter((q) => Math.abs(q.u - p.u) <= 0.12);
+      return { u: p.u, d: p.c - mean(near.map((q) => q.c)) };
+    });
+    let crossings = 0, sign = 0;
+    for (const p of det) {
+      const sg = p.d > 5 ? 1 : p.d < -5 ? -1 : 0;
+      if (sg && sg !== sign) { if (sign) crossings++; sign = sg; }
+    }
+    const dur = det.length > 1 ? det[det.length - 1].u - det[0].u : 0;
+    const rate = dur > 0 ? crossings / 2 / dur : 0;
+    const depth = det.length ? mean(det.map((p) => Math.abs(p.d))) * Math.PI / 2 : 0;
+    ok = rate >= 4 && rate <= 8.5 && depth >= 15;
+    metric = `${rate.toFixed(1)}回/秒・幅 ±${Math.round(depth)}¢`;
+    advice = depth < 15 ? '揺れをもう少し大きく'
+      : rate < 4 ? '揺れをもう少し速く' : rate > 8.5 ? '揺れが速すぎ。少しゆったりと' : 'いいビブラートです';
+  } else if (step.tech === 'kobushi') {
+    const seg = pts.filter((p) => p.u >= 0.15 && p.u <= T - 0.1);
+    const mid = seg.length >= 3 ? median(seg.map((p) => p.c)) : null;
+    hold = mid;
+    // 基準より 50 セント以上上がった区間を探し、短く鋭いものをこぶしとみなす
+    let best = null, run = null;
+    for (const p of seg) {
+      if (mid != null && p.c - mid >= 50) {
+        if (!run) run = { a: p.u, b: p.u, peak: p.c - mid };
+        else { run.b = p.u; run.peak = Math.max(run.peak, p.c - mid); }
+      } else if (run) {
+        if (!best || run.peak > best.peak) best = run;
+        run = null;
+      }
+    }
+    if (run && (!best || run.peak > best.peak)) best = run;
+    const len = best ? best.b - best.a : 0;
+    ok = !!best && best.peak >= 60 && len <= 0.35;
+    metric = best ? `+${Math.round(best.peak)}¢・${len.toFixed(2)}秒` : '山なし';
+    advice = !best ? '途中で一瞬だけ音を上げてみよう'
+      : len > 0.35 ? 'もっと素早く戻そう' : best.peak < 60 ? 'もう少しはっきり上げよう' : 'こぶしが入っています';
+  }
+
+  const holdOk = hold != null && Math.abs(hold) <= PASS_CENTS;
+  const perfect = ok && holdOk;
+  return {
+    ...base, hold, ok, metric, advice,
+    perfect, good: ok && !perfect, label: info.name + '!',
+  };
+}
+
 // ---------- 演出 ----------
 const RAINBOW = ['#ff004c', '#ff8a00', '#ffe600', '#00d26a', '#00b3ff', '#6a5cff', '#d100ff'];
 
@@ -700,7 +902,7 @@ function celebrate(result) {
   if (!result.perfect && !result.good) return;
   const burst = document.createElement('div');
   burst.className = 'burst' + (result.perfect ? '' : ' good');
-  burst.textContent = result.perfect ? 'PERFECT!' : 'GOOD';
+  burst.textContent = result.perfect ? 'PERFECT!' : result.label || 'GOOD';
   els.stage.appendChild(burst);
   if (!result.perfect) return;
   els.stage.classList.add('perfect');
@@ -725,7 +927,7 @@ function clearCelebration() {
 const $ = (id) => document.getElementById(id);
 const els = {
   stage: $('stage'), phase: $('phase'), progress: $('progress'), notes: $('notes'),
-  results: $('results'), meter: $('meter'), notice: $('notice'), timer: $('timer'), canvas: $('view'),
+  results: $('results'), meter: $('meter'), techHint: $('techHint'), notice: $('notice'), timer: $('timer'), canvas: $('view'),
   startBtn: $('startBtn'), nextBtn: $('nextBtn'), runRow: $('runRow'),
   prevBtn: $('prevBtn'), againBtn: $('againBtn'), stopBtn: $('stopBtn'),
   settings: $('settings'),
@@ -755,6 +957,7 @@ function render() {
   } else {
     els.progress.textContent = '';
   }
+  els.techHint.textContent = step && step.tech ? TECH[step.tech].hint : '';
   renderResults(step);
   renderNotes(step, -1);
   drawView();
@@ -765,6 +968,7 @@ const fmtCents = (c) => (c == null ? '—' : (c > 0 ? '+' : c < 0 ? '−' : '±'
 function renderResults(step) {
   const r = state.result;
   if (!step || !state.micOk) { els.results.innerHTML = ''; return; }
+  if (step.tech) { renderTechResult(step, r); return; }
   if (!r) {
     els.results.innerHTML = step.notes.map((m) => `<div class="bubble"><b>${noteName(m)}</b>&nbsp;</div>`).join('');
     return;
@@ -776,8 +980,27 @@ function renderResults(step) {
   }).join('');
 }
 
+function renderTechResult(step, r) {
+  const name = TECH[step.tech].name;
+  if (!r) {
+    els.results.innerHTML = `<div class="bubble wide"><b>${name}</b>お手本の動きをまねて歌ってみよう</div>`;
+    return;
+  }
+  const holdStatus = r.hold == null ? '' : statusOf(r.hold);
+  els.results.innerHTML =
+    `<div class="bubble ${r.ok ? 'pass' : 'miss'}"><b>${r.ok ? 'OK' : 'まだ'}</b>${name}</div>`
+    + `<div class="bubble ${holdStatus}"><b>${fmtCents(r.hold)}¢</b>伸ばしの音程</div>`
+    + `<div class="bubble"><b style="font-size:14px">${r.metric}</b></div>`
+    + `<div class="bubble wide">${r.advice}</div>`;
+}
+
 function renderNotes(step, activeIdx) {
   if (!step) { els.notes.innerHTML = ''; return; }
+  if (step.tech) {
+    els.notes.innerHTML = `<span class="n${activeIdx === 0 ? ' on' : ''}">${noteName(step.notes[0])}</span>`
+      + `<span class="tech">${TECH[step.tech].name}</span>`;
+    return;
+  }
   els.notes.innerHTML = step.notes
     .map((m, i) => `<span class="n${i === activeIdx ? ' on' : ''}">${noteName(m)}</span>`)
     .join('<span class="sep">–</span>');
@@ -802,7 +1025,8 @@ function drawView() {
   g.clearRect(0, 0, W, H);
 
   const step = state.running ? state.seq[state.index] : null;
-  const lo = step ? Math.min(...step.notes) - 2 : 48;
+  // テクニックは下に動く（フォール）ので下側を広めにとる
+  const lo = step ? Math.min(...step.notes) - (step.tech ? 4 : 2) : 48;
   const hi = step ? Math.max(...step.notes) + 2 : 60;
   const padL = 34, padT = 18, padB = 6;
   const plotW = W - padL, plotH = H - padT - padB;
@@ -829,7 +1053,7 @@ function drawView() {
     return;
   }
 
-  const { L, singStart, total } = timing();
+  const { L, singStart, total } = timing(step);
   const x = (t) => padL + (t / total) * plotW;
   const bandH = Math.max(8, plotH / (hi - lo) * 0.75);
   const now = ctx ? ctx.currentTime - state.stepStart : 0;
@@ -863,6 +1087,7 @@ function drawView() {
     g.fill();
   });
 
+  if (step.tech) drawTechGuide(g, step, x, y, H - padB, singWindows ? singWindows[0].start : singStart);
   drawVoice(g, step, x, y, lo, hi);
 
   // 再生位置
@@ -874,6 +1099,51 @@ function drawView() {
   if (activeIdx !== lastActive) {
     lastActive = activeIdx;
     renderNotes(step, activeIdx);
+  }
+}
+
+// テクニックのお手本の動きを点線で描く。アクセントは下に声の大きさのグラフも出す
+function drawTechGuide(g, step, x, y, bottom, singAt) {
+  const info = TECH[step.tech];
+  const T = TECH_LEN;
+  const m0 = step.notes[0];
+  g.strokeStyle = '#9a9aa2';
+  g.lineWidth = 2;
+  g.setLineDash([4, 4]);
+  [0, singAt].forEach((off) => {
+    g.beginPath();
+    for (let i = 0; i <= 80; i++) {
+      const u = (i / 80) * T;
+      const px = x(off + u), py = y(m0 + info.cents(u, T) / 100);
+      i ? g.lineTo(px, py) : g.moveTo(px, py);
+    }
+    g.stroke();
+  });
+  g.setLineDash([]);
+  if (step.tech !== 'accent') return;
+
+  // 声の大きさ（下から高さ 36px）。お手本はグレー、自分の声は青
+  const h = 36;
+  const lvY = (r) => bottom - Math.min(1, Math.max(0, (20 * Math.log10(Math.max(r, 1e-4)) + 50) / 40)) * h;
+  g.fillStyle = 'rgba(154,154,162,0.25)';
+  [0, singAt].forEach((off) => {
+    g.beginPath();
+    g.moveTo(x(off), bottom);
+    for (let i = 0; i <= 40; i++) {
+      const u = (i / 40) * T;
+      g.lineTo(x(off + u), bottom - info.gain(u, T) * h);
+    }
+    g.lineTo(x(off + T), bottom);
+    g.closePath();
+    g.fill();
+  });
+  const lv = state.levels;
+  if (lv.length > 1) {
+    g.strokeStyle = COLORS.voice;
+    g.lineWidth = 2;
+    g.beginPath();
+    lv.forEach((l, i) => (i ? g.lineTo(x(l.t), lvY(l.r)) : g.moveTo(x(l.t), lvY(l.r))));
+    g.stroke();
   }
 }
 
@@ -901,6 +1171,7 @@ function drawVoice(g, step, x, y, lo, hi) {
     const a = pts[i - 1], b = pts[i];
     if (b.t - a.t > 0.12) continue;  // 声が途切れたところは線をつなげない
     if (!state.result) g.strokeStyle = COLORS.voice;
+    else if (state.result.tech && !state.result.perfect) g.strokeStyle = state.result.ok ? COLORS.pass : COLORS.near;
     else if (!state.result.perfect) g.strokeStyle = COLORS[statusOf(b.c)];
     g.beginPath(); g.moveTo(a.x, a.y); g.lineTo(b.x, b.y); g.stroke();
   }
@@ -927,7 +1198,11 @@ function tick() {
   if (analyser && state.micOk) {
     analyser.getFloatTimeDomainData(micBuf);
     const f = detectPitch(micBuf, ctx.sampleRate);
-    if (f && state.recording) state.samples.push({ t: ctx.currentTime - state.stepStart, m: freqToMidi(f) });
+    if (state.recording) {
+      const t = ctx.currentTime - state.stepStart;
+      if (f) state.samples.push({ t, m: freqToMidi(f) });
+      state.levels.push({ t, r: micLevel });
+    }
     drawMeter(els.meter, f);
   }
   const e = elapsed();
@@ -984,9 +1259,16 @@ function fillNoteSelect(sel, from, to) {
 function syncSettingsUI() {
   $('patA').checked = settings.pattern === 'A';
   $('patB').checked = settings.pattern === 'B';
-  $('patternHint').textContent = settings.pattern === 'A'
-    ? 'C-D-C → C#-D#-C# …'
-    : 'C-D-C → C-E-C → C-F-C …';
+  $('patT').checked = settings.pattern === 'T';
+  $('patternHint').textContent = {
+    A: 'C-D-C → C#-D#-C# …',
+    B: 'C-D-C → C-E-C → C-F-C …',
+    T: 'しゃくり・フォールなどカラオケの技を1音ずつ練習',
+  }[settings.pattern];
+  $('techField').hidden = settings.pattern !== 'T';
+  $('noteLenField').hidden = settings.pattern === 'T';  // テクニックは1音 1.6 秒で固定
+  $('tech').value = settings.tech;
+  $('techFieldHint').textContent = settings.tech === 'mix' ? '5つの技を順番に' : TECH[settings.tech].hint;
   $('startNote').value = settings.startNote;
   $('upperNote').value = settings.upperNote;
   $('noteLen').value = settings.noteLen;
@@ -999,8 +1281,8 @@ function syncSettingsUI() {
   $('volume').value = settings.volume;
   $('volumeVal').textContent = Math.round(settings.volume * 100) + '%';
 
-  const seq = buildSequence(settings.pattern, settings.startNote, settings.upperNote);
-  const perStep = timing().total + (settings.auto ? RESULT_PAUSE : 1.2);
+  const seq = buildSequence(settings.pattern, settings.startNote, settings.upperNote, settings.tech);
+  const perStep = timing(seq[0]).total + (settings.auto ? RESULT_PAUSE : 1.2);
   $('summary').textContent = seq.length
     ? `全 ${seq.length} 回・1回 約${perStep.toFixed(1)}秒・通しで約 ${Math.ceil(seq.length * perStep / 60)} 分（5分で約 ${Math.floor(SESSION_LIMIT / perStep)} 回）`
     : '上限音は開始音より長2度以上高くしてください。';
@@ -1011,6 +1293,7 @@ function bindSettings() {
   fillNoteSelect($('upperNote'), 44, 79);  // G#2〜G5
   document.querySelectorAll('input[name="pattern"]').forEach((r) =>
     r.addEventListener('change', () => { settings.pattern = r.value; changed(); }));
+  $('tech').addEventListener('change', (e) => { settings.tech = e.target.value; changed(); });
   $('startNote').addEventListener('change', (e) => { settings.startNote = +e.target.value; changed(); });
   $('upperNote').addEventListener('change', (e) => { settings.upperNote = +e.target.value; changed(); });
   $('noteLen').addEventListener('input', (e) => { settings.noteLen = +e.target.value; changed(); });
